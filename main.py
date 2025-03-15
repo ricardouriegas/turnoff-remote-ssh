@@ -290,16 +290,45 @@ if authenticated:
             with tab2:
                 st.subheader("Programar apagado")
                 
+                # Store the selected date and time in session state to prevent reset
+                if 'selected_shutdown_date' not in st.session_state:
+                    st.session_state.selected_shutdown_date = datetime.now().date()
+                if 'selected_shutdown_time' not in st.session_state:
+                    st.session_state.selected_shutdown_time = (datetime.now() + timedelta(minutes=5)).time()
+                
                 col1, col2 = st.columns(2)
                 with col1:
-                    selected_date = st.date_input("Fecha:", value=datetime.now().date(), min_value=datetime.now().date())
+                    selected_date = st.date_input(
+                        "Fecha:", 
+                        value=st.session_state.selected_shutdown_date,
+                        min_value=datetime.now().date(),
+                        key="shutdown_date"
+                    )
+                    st.session_state.selected_shutdown_date = selected_date
+                    
                 with col2:
-                    selected_time = st.time_input("Hora:", value=(datetime.now() + timedelta(minutes=5)).time())
+                    selected_time = st.time_input(
+                        "Hora:", 
+                        value=st.session_state.selected_shutdown_time,
+                        key="shutdown_time"
+                    )
+                    st.session_state.selected_shutdown_time = selected_time
                 
+                # Combine date and time for shutdown
                 shutdown_time = datetime.combine(selected_date, selected_time)
                 
-                # Show scheduled time in user-friendly format
-                st.info(f"📅 Hora programada: {shutdown_time.strftime('%d/%m/%Y a las %H:%M')}")
+                # Check if the selected time is valid (in the future)
+                current_time = datetime.now()
+                time_difference = shutdown_time - current_time
+                minutes_difference = time_difference.total_seconds() / 60
+                
+                # Show scheduled time in user-friendly format with validation
+                if minutes_difference <= 0:
+                    st.error(f"⚠️ La hora seleccionada ({shutdown_time.strftime('%d/%m/%Y a las %H:%M')}) está en el pasado. Seleccione una hora futura.")
+                    valid_time = False
+                else:
+                    st.info(f"📅 Hora programada: {shutdown_time.strftime('%d/%m/%Y a las %H:%M')} (en {int(minutes_difference)} minutos)")
+                    valid_time = True
                 
                 # Select computers to schedule
                 st.subheader("Seleccionar equipos")
@@ -314,7 +343,13 @@ if authenticated:
                         selected_computers.append(computer)
                 
                 if len(selected_computers) > 0:
-                    if st.button(f"⏱️ Programar apagado para {len(selected_computers)} equipos", use_container_width=True):
+                    shutdown_button = st.button(
+                        f"⏱️ Programar apagado para {len(selected_computers)} equipos", 
+                        use_container_width=True,
+                        disabled=not valid_time
+                    )
+                    
+                    if shutdown_button:
                         if not st.session_state.ssh_password:
                             st.error("Debe configurar las credenciales SSH primero")
                         else:
