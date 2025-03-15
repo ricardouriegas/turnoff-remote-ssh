@@ -9,11 +9,11 @@ import uuid
 if 'shutdown_results' not in st.session_state:
     st.session_state.shutdown_results = []
 if 'ssh_user' not in st.session_state:
-    st.session_state.ssh_user = "admin"
+    st.session_state.ssh_user = "admin"  # Default user (legacy)
 if 'ssh_password' not in st.session_state:
-    st.session_state.ssh_password = ""
+    st.session_state.ssh_password = ""   # Default password (legacy)
 if 'sudo_pass' not in st.session_state:
-    st.session_state.sudo_pass = ""
+    st.session_state.sudo_pass = ""      # Default sudo password (legacy)
 if 'page' not in st.session_state:
     st.session_state.page = "dashboard"
 
@@ -151,28 +151,39 @@ def schedule_shutdown(ip, os_type, username, password, sudo_password=None, shutd
             except:
                 pass  # Ignorar errores al cerrar conexión
 
-# Define immediate shutdown handler function before using it
-def handle_immediate_shutdown(ip, os_type):
-    if not st.session_state.get('ssh_password'):
-        st.session_state.shutdown_results.append(
-            {"success": False, "ip": ip, "os": os_type, "message": "Se requiere la contraseña SSH"}
-        )
+# Define immediate shutdown handler function with per-computer credentials
+def handle_immediate_shutdown(ip, os_type, computer=None):
+    # Use computer-specific credentials if available, otherwise fall back to global
+    username = computer.get('ssh_user', st.session_state.ssh_user) if computer else st.session_state.ssh_user
+    password = computer.get('ssh_password', st.session_state.ssh_password) if computer else st.session_state.ssh_password
+    sudo_pass = computer.get('sudo_pass', st.session_state.sudo_pass) if computer else st.session_state.sudo_pass
+    
+    if not password:
+        st.session_state.shutdown_results.append({
+            "success": False, 
+            "ip": ip, 
+            "os": os_type, 
+            "message": "No hay contraseña SSH configurada para este equipo"
+        })
         return
         
     ip = ip.strip()
     
     if not ip:
-        st.session_state.shutdown_results.append(
-            {"success": False, "ip": "Unknown", "os": os_type, "message": "IP address is required"}
-        )
+        st.session_state.shutdown_results.append({
+            "success": False,
+            "ip": "Unknown",
+            "os": os_type,
+            "message": "IP address is required"
+        })
         return
         
     success, message = schedule_shutdown(
         ip=ip, 
         os_type=os_type, 
-        username=st.session_state.ssh_user, 
-        password=st.session_state.ssh_password,
-        sudo_password=st.session_state.sudo_pass,
+        username=username, 
+        password=password,
+        sudo_password=sudo_pass,
         immediate=True
     )
     
@@ -184,6 +195,27 @@ def handle_immediate_shutdown(ip, os_type):
         "message": message,
         "time": datetime.now().strftime("%H:%M:%S")
     })
+
+# Initialize default computer list with credential fields
+if 'computers' not in st.session_state:
+    st.session_state.computers = [
+        {
+            "IP": "192.168.1.100", 
+            "OS": "Linux", 
+            "Description": "Server 1",
+            "ssh_user": "admin",
+            "ssh_password": "",
+            "sudo_pass": ""
+        },
+        {
+            "IP": "192.168.1.101", 
+            "OS": "Linux", 
+            "Description": "Server 2",
+            "ssh_user": "admin",
+            "ssh_password": "",
+            "sudo_pass": ""
+        }
+    ]
 
 # Interfaz web
 st.set_page_config(page_title="Control de Apagado Remoto", page_icon="⏰", layout="wide")
@@ -274,18 +306,23 @@ if authenticated:
                                 ip = computer["IP"]
                                 os_type = computer["OS"]
                                 description = computer.get("Description", "")
+                                has_credentials = bool(computer.get('ssh_password', ''))
                                 
                                 # Create a card-like container for each computer
                                 with st.container():
                                     st.subheader(f"{ip}")
                                     st.caption(f"{description} ({os_type})")
                                     
+                                    # Show credential status
+                                    if has_credentials:
+                                        st.caption("✅ Credenciales configuradas")
+                                    else:
+                                        st.caption("⚠️ Sin credenciales específicas")
+                                    
                                     if st.button("🔴 Apagar Ahora", key=f"shutdown_now_{ip}", use_container_width=True):
-                                        if not st.session_state.ssh_password:
-                                            st.error("Debe configurar las credenciales SSH primero")
-                                        else:
-                                            handle_immediate_shutdown(ip, os_type)
-                                            st.rerun()
+                                        # Use computer-specific credentials when available
+                                        handle_immediate_shutdown(ip, os_type, computer)
+                                        st.rerun()
             
             with tab2:
                 st.subheader("Programar apagado")
@@ -335,8 +372,11 @@ if authenticated:
                 selected_computers = []
                 
                 for idx, computer in enumerate(computers):
+                    has_credentials = bool(computer.get('ssh_password', ''))
+                    credential_status = "✅" if has_credentials else "⚠️"
+                    
                     selected = st.checkbox(
-                        f"{computer['IP']} ({computer.get('Description', '')})", 
+                        f"{computer['IP']} - {computer.get('Description', '')} ({credential_status})", 
                         key=f"select_computer_{idx}"
                     )
                     if selected:
@@ -350,21 +390,37 @@ if authenticated:
                     )
                     
                     if shutdown_button:
-                        if not st.session_state.ssh_password:
-                            st.error("Debe configurar las credenciales SSH primero")
+                        if all(not pc.get('ssh_password', '') for pc in selected_computers):
+                            st.error("⚠️ Ninguno de los equipos seleccionados tiene credenciales configuradas")
                         else:
                             success_count = 0
                             for pc in selected_computers:
                                 ip = pc["IP"].strip()
                                 os_type = pc["OS"]
                                 
+                                # Use computer-specific credentials
+                                username = pc.get('ssh_user', st.session_state.ssh_user)
+                                password = pc.get('ssh_password', st.session_state.ssh_password)
+                                sudo_pass = pc.get('sudo_pass', st.session_state.sudo_pass)
+                                
+                                # Skip computers without credentials
+                                if not password:
+                                    st.session_state.shutdown_results.append({
+                                        "success": False,
+                                        "ip": ip,
+                                        "os": os_type,
+                                        "message": "No hay credenciales configuradas para este equipo",
+                                        "time": datetime.now().strftime("%H:%M:%S")
+                                    })
+                                    continue
+                                
                                 if ip:
                                     success, message = schedule_shutdown(
                                         ip=ip,
                                         os_type=os_type,
-                                        username=st.session_state.ssh_user,
-                                        password=st.session_state.ssh_password,
-                                        sudo_password=st.session_state.sudo_pass,
+                                        username=username,
+                                        password=password,
+                                        sudo_password=sudo_pass,
                                         shutdown_time=shutdown_time
                                     )
                                     
@@ -395,39 +451,111 @@ if authenticated:
         st.title("Gestión de Equipos")
         
         # Instructions
-        st.info("Añada, edite o elimine equipos de la lista")
+        st.info("Añada, edite o elimine equipos de la lista. Para cada equipo, puede configurar credenciales SSH específicas.")
         
-        # Editable table of computers
-        computers = st.data_editor(
-            st.session_state.get('computers', [
-                {"IP": "192.168.1.100", "OS": "Linux", "Description": "Server 1"},
-                {"IP": "192.168.1.101", "OS": "Linux", "Description": "Server 2"}
-            ]),
-            column_config={
-                "IP": st.column_config.TextColumn("Dirección IP", required=True, width="medium"),
-                "OS": st.column_config.SelectboxColumn(
-                    "Sistema Operativo",
-                    options=["Linux", "Windows"],
-                    required=True,
-                    width="small"
-                ),
-                "Description": st.column_config.TextColumn("Descripción", width="large")
-            },
-            num_rows="dynamic",
-            use_container_width=True,
-            hide_index=True,
-        )
+        # Need to split the interface to allow credential editing
+        tabs = st.tabs(["🖥️ Listado de Equipos", "🔑 Configurar Credenciales"])
         
-        # Save computers to session state
-        st.session_state.computers = computers
-        
+        with tabs[0]:
+            # Editable table of computers (basic info)
+            computers_basic = st.data_editor(
+                [{
+                    "IP": c["IP"],
+                    "OS": c["OS"],
+                    "Description": c.get("Description", "")
+                } for c in st.session_state.computers],
+                column_config={
+                    "IP": st.column_config.TextColumn("Dirección IP", required=True, width="medium"),
+                    "OS": st.column_config.SelectboxColumn(
+                        "Sistema Operativo",
+                        options=["Linux", "Windows"],
+                        required=True,
+                        width="small"
+                    ),
+                    "Description": st.column_config.TextColumn("Descripción", width="large")
+                },
+                num_rows="dynamic",
+                use_container_width=True,
+                hide_index=True,
+                key="computers_basic_editor"
+            )
+            
+            # Update session state with basic info but preserve credentials
+            updated_computers = []
+            for idx, basic in enumerate(computers_basic):
+                # Get existing credentials if any
+                existing = st.session_state.computers[idx] if idx < len(st.session_state.computers) else {}
+                updated_computer = {
+                    "IP": basic["IP"],
+                    "OS": basic["OS"],
+                    "Description": basic.get("Description", ""),
+                    "ssh_user": existing.get("ssh_user", st.session_state.ssh_user),
+                    "ssh_password": existing.get("ssh_password", ""),
+                    "sudo_pass": existing.get("sudo_pass", "")
+                }
+                updated_computers.append(updated_computer)
+            
+            # Add any new computers
+            if len(computers_basic) > len(st.session_state.computers):
+                for i in range(len(st.session_state.computers), len(computers_basic)):
+                    updated_computers[i] = {
+                        "IP": computers_basic[i]["IP"],
+                        "OS": computers_basic[i]["OS"],
+                        "Description": computers_basic[i].get("Description", ""),
+                        "ssh_user": st.session_state.ssh_user,
+                        "ssh_password": "",
+                        "sudo_pass": ""
+                    }
+            
+            st.session_state.computers = updated_computers
+
+        with tabs[1]:
+            st.subheader("Credenciales de acceso SSH")
+            st.info("Configure las credenciales SSH específicas para cada equipo. Estos datos se utilizarán para la conexión remota.")
+            
+            # Show credential editor for each computer
+            for idx, computer in enumerate(st.session_state.computers):
+                with st.expander(f"{computer['IP']} - {computer.get('Description', '')}"):
+                    # Create a form for each computer's credentials
+                    with st.form(key=f"credentials_form_{idx}"):
+                        cols = st.columns(3)
+                        with cols[0]:
+                            ssh_user = st.text_input(
+                                "Usuario SSH:", 
+                                value=computer.get("ssh_user", st.session_state.ssh_user),
+                                key=f"ssh_user_{idx}"
+                            )
+                        with cols[1]:
+                            ssh_password = st.text_input(
+                                "Contraseña SSH:", 
+                                type="password",
+                                value=computer.get("ssh_password", ""),
+                                key=f"ssh_password_{idx}"
+                            )
+                        with cols[2]:
+                            sudo_pass = st.text_input(
+                                "Contraseña sudo:", 
+                                type="password",
+                                value=computer.get("sudo_pass", ""),
+                                help="Solo para Linux, si es diferente de la SSH",
+                                key=f"sudo_pass_{idx}"
+                            )
+                            
+                        if st.form_submit_button("Guardar credenciales"):
+                            st.session_state.computers[idx]["ssh_user"] = ssh_user
+                            st.session_state.computers[idx]["ssh_password"] = ssh_password
+                            st.session_state.computers[idx]["sudo_pass"] = sudo_pass
+                            st.success("✅ Credenciales actualizadas")
+                        
         # Add option to import/export computer list
+        st.subheader("Importar/Exportar")
         col1, col2 = st.columns(2)
         
         with col1:
+            # Export only basic info (no passwords)
             st.download_button(
-                "📥 Exportar lista de equipos",
-                "\n".join([f"{c['IP']},{c['OS']},{c.get('Description', '')}" for c in computers]),
+                "📥 Exportar lista de equipos (sin credenciales)",
+                "\n".join([f"{c['IP']},{c['OS']},{c.get('Description', '')}" for c in st.session_state.computers]),
                 file_name="computers_list.csv",
                 mime="text/csv"
             )
@@ -444,7 +572,10 @@ if authenticated:
                             imported_computers.append({
                                 "IP": parts[0].strip(),
                                 "OS": parts[1].strip(),
-                                "Description": parts[2].strip() if len(parts) > 2 else ""
+                                "Description": parts[2].strip() if len(parts) > 2 else "",
+                                "ssh_user": st.session_state.ssh_user,
+                                "ssh_password": "",
+                                "sudo_pass": ""
                             })
                     
                     if imported_computers:
@@ -456,15 +587,13 @@ if authenticated:
     
     # SSH Configuration page
     elif st.session_state.page == "ssh":
-        st.title("Configuración SSH")
+        st.title("Configuración SSH Global")
         
         st.info("""
-        **Configuración de acceso SSH:**
+        **Configuración de acceso SSH predeterminada:**
         
-        Ingrese las credenciales para acceder a los equipos remotos:
-        - Usuario SSH: El nombre de usuario para conectarse a la máquina remota
-        - Contraseña SSH: La contraseña del usuario para autenticarse
-        - Contraseña sudo: Solo para Linux, si se requiere para ejecutar comandos con privilegios
+        Estas credenciales se utilizarán como valores predeterminados para equipos que no tengan credenciales específicas configuradas.
+        Para configurar credenciales por equipo, vaya a "Gestionar Equipos" > "Configurar Credenciales".
         """)
         
         with st.form("ssh_config_form"):
