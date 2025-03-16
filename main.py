@@ -592,8 +592,14 @@ if authenticated:
         st.info("""
         **Configuración de acceso SSH predeterminada:**
         
-        Estas credenciales se utilizarán como valores predeterminados para equipos que no tengan credenciales específicas configuradas.
-        Para configurar credenciales por equipo, vaya a "Gestionar Equipos" > "Configurar Credenciales".
+        Estas credenciales se utilizarán como valores predeterminados para:
+        1. Equipos nuevos que se agreguen al sistema
+        2. Equipos existentes que no tengan credenciales específicas configuradas
+        
+        Al guardar esta configuración, se actualizarán automáticamente todos los equipos
+        que no tengan credenciales propias establecidas.
+        
+        Para configurar credenciales específicas por equipo, vaya a "Gestionar Equipos" > "Configurar Credenciales".
         """)
         
         with st.form("ssh_config_form"):
@@ -604,18 +610,52 @@ if authenticated:
             sudo_pass = st.text_input("Contraseña sudo (Linux):", type="password", value=st.session_state.sudo_pass, 
                                      help="Solo necesaria si es diferente de la contraseña SSH")
             
+            apply_to_all = st.checkbox("Aplicar a todos los equipos (sobrescribir credenciales individuales)", 
+                                      help="Marque esta opción para sobrescribir todas las credenciales individuales con estos valores")
+            
             submitted = st.form_submit_button("Guardar Configuración")
             
             if submitted:
+                # Update global credentials
                 st.session_state.ssh_user = ssh_user
                 st.session_state.ssh_password = ssh_password
                 st.session_state.sudo_pass = sudo_pass
                 
+                # Count updated computers
+                updated_count = 0
+                total_count = len(st.session_state.computers)
+                
+                # Update computers without credentials or all if apply_to_all is checked
+                for i, computer in enumerate(st.session_state.computers):
+                    if apply_to_all or not computer.get('ssh_password'):
+                        st.session_state.computers[i]['ssh_user'] = ssh_user
+                        st.session_state.computers[i]['ssh_password'] = ssh_password
+                        st.session_state.computers[i]['sudo_pass'] = sudo_pass
+                        updated_count += 1
+                
                 if ssh_password:
-                    st.success("✅ Configuración SSH actualizada")
+                    if apply_to_all:
+                        st.success(f"✅ Configuración SSH actualizada y aplicada a todos los equipos ({updated_count}/{total_count})")
+                    else:
+                        st.success(f"✅ Configuración SSH actualizada y aplicada a equipos sin credenciales ({updated_count}/{total_count})")
                 else:
                     st.warning("⚠️ Se requiere contraseña SSH")
+                    
+                # Show which computers were updated if any
+                if updated_count > 0:
+                    st.info("Los equipos actualizados se marcarán con ✅ en el Panel de Control")
         
+        # Add a utility to see which computers currently have no credentials
+        st.subheader("Estado de Credenciales")
+        no_creds = [c for c in st.session_state.computers if not c.get('ssh_password')]
+        
+        if no_creds:
+            st.warning(f"Hay {len(no_creds)} equipos sin credenciales configuradas:")
+            for comp in no_creds:
+                st.markdown(f"• {comp['IP']} - {comp.get('Description', '')}")
+        else:
+            st.success("✅ Todos los equipos tienen credenciales configuradas")
+                
         # SSH testing section
         st.subheader("Probar conexión SSH")
         
