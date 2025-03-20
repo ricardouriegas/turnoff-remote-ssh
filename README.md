@@ -17,7 +17,7 @@ pip install streamlit paramiko
 ```
 3. Run the application in the manager PC
 ```bash
-python3 -m streamlit run app.py
+python3 -m streamlit run main.py
 ```
 4. Run the bash script in the device to be managed
 ```bash
